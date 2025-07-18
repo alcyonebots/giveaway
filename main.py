@@ -433,7 +433,7 @@ def main():
     app.add_handler(CommandHandler('cancel_giveaway', cancel_giveaway))
     app.add_handler(CommandHandler('stats', stats))
     app.add_handler(CommandHandler('help', help_command))
-    app.add_handler(MessageHandler(filters.GROUPS & filters.TEXT, count_messages))
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, count_messages))
 
     print("Bot running...")
     app.run_polling()
