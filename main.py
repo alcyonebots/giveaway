@@ -2,6 +2,7 @@ import logging
 import random
 import threading
 import time
+import re
 from datetime import datetime, timedelta
 
 from telegram import (
@@ -119,24 +120,39 @@ def enter_host(update: Update, context: CallbackContext):
     update.message.reply_text('Giveaway duration? (in hours e.g. 48)')
     return ENTER_DURATION
 
-def enter_duration(update: Update, context: CallbackContext):
-    try:
-        hours = int(update.message.text)
-    except:
-        update.message.reply_text("Enter a valid number (hours).")
-        return ENTER_DURATION
-    context.user_data['duration_hours'] = hours
+import re
 
-    fs_channels = context.user_data['fs_channels']  # List of @usernames or empty
+def enter_duration(update: Update, context: CallbackContext):
+    txt = update.message.text.strip().lower()
+    match = re.match(r"^(\d{1,4})([mhdw])$", txt)
+    if not match:
+        update.message.reply_text("Please enter duration like 30m / 1h / 3d / 1w (m=minutes, h=hours, d=days, w=weeks)")
+        return ENTER_DURATION
+
+    val, typ = int(match[1]), match[2]
+    if typ == "m":
+        delta = timedelta(minutes=val)
+    elif typ == "h":
+        delta = timedelta(hours=val)
+    elif typ == "d":
+        delta = timedelta(days=val)
+    elif typ == "w":
+        delta = timedelta(weeks=val)
+    else:
+        update.message.reply_text("Invalid format. Use like 30m / 1h / 3d / 1w.")
+        return ENTER_DURATION
+
+    context.user_data['duration_delta'] = delta
+
+    fs_channels = context.user_data['fs_channels']
     title = context.user_data['title']
     banner_file_id = context.user_data['banner_file_id']
     hosted_by = context.user_data['hosted_by']
 
+    requirement_caption = ""
     if fs_channels:
         channel_list_disp = '\n'.join([uname for uname in fs_channels])
         requirement_caption = f"<b>Required:</b>\n{channel_list_disp}\n\n"
-    else:
-        requirement_caption = ""
 
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🎉 Participate", callback_data="join_giveaway")]])
     msg = context.bot.send_photo(
@@ -147,13 +163,13 @@ def enter_duration(update: Update, context: CallbackContext):
             f"{requirement_caption}"
             f"<b>Hosted By:</b> {hosted_by}\n"
             f"<b>Entries:</b> 0\n"
-            f"<b>Ends in:</b> {hours} hour(s).\n"
+            f"<b>Ends in:</b> {txt}\n"
             "\nClick below to enter!"
         ),
         reply_markup=keyboard,
         parse_mode=ParseMode.HTML
     )
-    end_time = datetime.utcnow() + timedelta(hours=hours)
+    end_time = datetime.utcnow() + delta
     giveaway = {
         'chat_id': GROUP_ID,
         'message_id': msg.message_id,
@@ -171,7 +187,7 @@ def enter_duration(update: Update, context: CallbackContext):
     threading.Thread(target=wait_and_end_giveaway, args=(insert.inserted_id, end_time, context.bot)).start()
     update.message.reply_text('✅ Giveaway posted in group!')
     return ConversationHandler.END
-
+    
 def wait_and_end_giveaway(giveaway_id, end_time, bot):
     delay = (end_time - datetime.utcnow()).total_seconds()
     if delay > 0:
