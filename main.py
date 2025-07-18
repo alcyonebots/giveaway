@@ -17,7 +17,7 @@ from pymongo import MongoClient
 # =========================
 
 TOKEN = '7835346917:AAGuHYIBAscjbTKoadzG7EGFaRKOS2ZMyck'
-MONGO_URI = 'mongodb://localhost:27017'
+MONGO_URI = 'mongodb+srv://Cenzo:Cenzo123@cenzo.azbk1.mongodb.net/'
 ADMIN_IDS = [1209431233, 1148182834, 6663845789]     # List of Telegram admin user IDs (integers)
 GROUP_ID = -1002529323673              # Your group chat id (numeric, begins with -100...)
 
