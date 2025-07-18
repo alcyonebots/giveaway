@@ -1,104 +1,90 @@
 import logging
 import random
-import asyncio
+import threading
 from datetime import datetime, timedelta
-
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup
-)
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler, ConversationHandler,
-    ContextTypes, MessageHandler, filters
-)
+from telegram import (Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode, ChatMember)
+from telegram.ext import (Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, ConversationHandler, CallbackContext)
 from pymongo import MongoClient
-
-# =========================
-#      CONFIGURATION
-# =========================
 
 TOKEN = '7835346917:AAGuHYIBAscjbTKoadzG7EGFaRKOS2ZMyck'
 MONGO_URI = 'mongodb+srv://Cenzo:Cenzo123@cenzo.azbk1.mongodb.net/'
-ADMIN_IDS = [1209431233, 1148182834, 6663845789]     # List of Telegram admin user IDs (integers)
-GROUP_ID = -1002529323673              # Your group chat id (numeric, begins with -100...)
-
-# =========================
-#      MONGO SETUP
-# =========================
+ADMIN_IDS = [1209431233, 1148182834, 6663845789]
+GROUP_ID = -1002529323673
 
 client = MongoClient(MONGO_URI)
 db = client['giveaway_db']
 
-# =========================
-#        LOGGING
-# =========================
-
 logging.basicConfig(level=logging.INFO)
-
-# =========================
-#   Conversation States
-# =========================
 
 ENTER_FS_CHANNELS, ENTER_TITLE, ENTER_BANNER, ENTER_HOST, ENTER_DURATION = range(5)
 
-# =========================
-#     /start command
-# =========================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Hi! I'm the Giveaway Bot.\n"
-        "Use /start_giveaway to create a new giveaway (admins only).\n"
-        "/cancel_giveaway to cancel active giveaway.\n"
-        "/stats for stats (admins only)."
+def start(update, context):
+    update.message.reply_text(
+        "Welcome to the Giveaway Bot!\n"
+        "• /start_giveaway - New giveaway (admin only)\n"
+        "• /cancel_giveaway - Cancel giveaway\n"
+        "• /stats - Show stats\n"
+        "• /help - Show this help"
     )
 
-# =========================
-#   Giveaway Conversation
-# =========================
+def help_command(update, context):
+    text = (
+        "<b>Giveaway Bot Help</b>\n\n"
+        "Commands:\n"
+        "/start - Show welcome message\n"
+        "/help - Show this help message\n"
+        "<b>Admin Commands (Admins only):</b>\n"
+        "/start_giveaway - Create a new giveaway\n"
+        "/cancel_giveaway - Cancel the running giveaway\n"
+        "/stats - Get all giveaway stats\n\n"
+        "<b>How it works:</b>\n"
+        "- Giveaway will always post in the fixed group\n"
+        "- User must have 100+ msgs in group\n"
+        "- FSUB: accept ANY t.me group/channel/join link"
+    )
+    update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
-async def start_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start_giveaway(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await update.message.reply_text('Only admins can start giveaways.')
+        update.message.reply_text("Only admins can start a giveaway.")
         return ConversationHandler.END
-    await update.message.reply_text(
-        'Send FSUB (required join) channel/group links separated by commas.\n'
-        'For example:\nhttps://t.me/abc, https://t.me/+privateinvitecode'
-    )
+    context.user_data.clear()
+    update.message.reply_text("Send FSUB channel/group links separated by commas.\nExample: https://t.me/abc, https://t.me/+invite")
     return ENTER_FS_CHANNELS
 
-async def enter_fs_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def enter_fs_channels(update, context):
     fs_channels = [c.strip() for c in update.message.text.split(',') if c.strip()]
     context.user_data['fs_channels'] = fs_channels
-    await update.message.reply_text('Great! Now send me the Giveaway Title.')
+    update.message.reply_text("Now send the Giveaway Title.")
     return ENTER_TITLE
 
-async def enter_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def enter_title(update, context):
     context.user_data['title'] = update.message.text
-    await update.message.reply_text('Please send the banner image for your giveaway (as photo, not file).')
+    update.message.reply_text("Send banner image (photo, not file).")
     return ENTER_BANNER
 
-async def enter_banner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def enter_banner(update, context):
     if update.message.photo:
-        photo_file_id = update.message.photo[-1].file_id
-        context.user_data['banner_file_id'] = photo_file_id
-        await update.message.reply_text('Enter the name for Hosted By:')
+        context.user_data['banner_file_id'] = update.message.photo[-1].file_id
+        update.message.reply_text("Who is Hosting? (send host name or username)")
         return ENTER_HOST
     else:
-        await update.message.reply_text('Please send a valid image/photo for the banner!')
+        update.message.reply_text('Please send an image/photo for the banner!')
         return ENTER_BANNER
 
-async def enter_host(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def enter_host(update, context):
     context.user_data['hosted_by'] = update.message.text
-    await update.message.reply_text('How long should the giveaway run? Send in hours (e.g. 168 for 7 days):')
+    update.message.reply_text('Giveaway duration? (in hours e.g. 48)')
     return ENTER_DURATION
 
-async def enter_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def enter_duration(update, context):
     try:
         hours = int(update.message.text)
-    except Exception:
-        await update.message.reply_text("Please enter a valid number of hours.")
+    except:
+        update.message.reply_text("Enter a valid number (hours).")
         return ENTER_DURATION
+    context.user_data['duration_hours'] = hours
 
     fs_channels = context.user_data['fs_channels']
     title = context.user_data['title']
@@ -107,11 +93,8 @@ async def enter_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     channel_list_disp = '\n'.join([f'- {link}' for link in fs_channels])
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎉 Participate", callback_data="join_giveaway")]
-    ])
-
-    message = await context.bot.send_photo(
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🎉 Participate", callback_data="join_giveaway")]])
+    msg = context.bot.send_photo(
         chat_id=GROUP_ID,
         photo=banner_file_id,
         caption=(
@@ -120,16 +103,15 @@ async def enter_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>Hosted By:</b> {hosted_by}\n"
             f"<b>Entries:</b> 0\n"
             f"<b>Ends in:</b> {hours} hour(s).\n"
-            f"\nClick below to enter!"
+            "\nClick below to enter!"
         ),
         reply_markup=keyboard,
-        parse_mode='HTML'
+        parse_mode=ParseMode.HTML
     )
-
     end_time = datetime.utcnow() + timedelta(hours=hours)
     giveaway = {
         'chat_id': GROUP_ID,
-        'message_id': message.message_id,
+        'message_id': msg.message_id,
         'fs_channels': fs_channels,
         'title': title,
         'banner_file_id': banner_file_id,
@@ -140,216 +122,165 @@ async def enter_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'active': True,
         'cancelled': False,
     }
-    inserted = db.giveaways.insert_one(giveaway)
-    context.application.create_task(schedule_giveaway_end(context, inserted.inserted_id, end_time))
-
-    await update.message.reply_text('✅ Giveaway started in the group!')
-
+    insert = db.giveaways.insert_one(giveaway)
+    threading.Thread(target=wait_and_end_giveaway, args=(insert.inserted_id, end_time, context.bot)).start()
+    update.message.reply_text('✅ Giveaway posted in group!')
     return ConversationHandler.END
 
-# =========================
-#    Participation Handler
-# =========================
+def wait_and_end_giveaway(giveaway_id, end_time, bot):
+    delay = (end_time - datetime.utcnow()).total_seconds()
+    if delay > 0:
+        threading.Event().wait(delay)
+    give = db.giveaways.find_one({'_id': giveaway_id})
+    if give and give['active'] and not give.get('cancelled', False):
+        end_giveaway(give, bot)
 
-async def join_giveaway_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def join_giveaway_callback(update, context):
     query = update.callback_query
     user = query.from_user
-    chat_id = GROUP_ID
-    message_id = query.message.message_id
-
-    giveaway = db.giveaways.find_one({'chat_id': GROUP_ID, 'message_id': message_id, 'active': True, 'cancelled': False})
+    giveaway = db.giveaways.find_one({'chat_id': GROUP_ID, 'message_id': query.message.message_id, 'active': True, 'cancelled': False})
     if not giveaway:
-        await query.answer('This giveaway is over, cancelled, or not found.')
+        query.answer('This giveaway is over or cancelled.')
         return
 
-    if user.id in [entry['user_id'] for entry in giveaway['entries']]:
-        await query.answer("You've already joined!", show_alert=True)
+    if user.id in [e['user_id'] for e in giveaway['entries']]:
+        query.answer('Already joined!', show_alert=True)
         return
 
-    user_message_count = db.msg_count.find_one({'chat_id': GROUP_ID, 'user_id': user.id}) or {}
-    if user_message_count.get('count', 0) < 100:
-        await query.answer('You need at least 100 messages in this group to join.', show_alert=True)
+    msg_count = db.msg_count.find_one({'chat_id': GROUP_ID, 'user_id': user.id}) or {}
+    if msg_count.get('count', 0) < 100:
+        query.answer('You need at least 100 msgs in the group!', show_alert=True)
         return
 
-    # FSUB check logic
     for ch_link in giveaway['fs_channels']:
-        await asyncio.sleep(0.5)
+        import time; time.sleep(0.5)
         try:
             identifier = ch_link.split('t.me/')[1] if 't.me/' in ch_link else ch_link
             if identifier.startswith('+'):
-                identifier = ch_link  # for invite links use full link
-            member = await context.bot.get_chat_member(identifier, user.id)
-            if member.status in ['left', 'kicked']:
-                await query.answer(f'You must join {ch_link} to participate!', show_alert=True)
+                identifier = ch_link  # invite link
+            member = context.bot.get_chat_member(identifier, user.id)
+            if member.status in [ChatMember.LEFT, ChatMember.KICKED]:
+                query.answer(f'You must join {ch_link}!', show_alert=True)
                 return
-        except Exception as e:
-            await query.answer(f"Bot can't verify: {ch_link}", show_alert=True)
+        except Exception:
+            query.answer(f'Cannot verify: {ch_link}', show_alert=True)
             return
 
-    db.giveaways.update_one(
-        {'_id': giveaway['_id']},
-        {'$push': {'entries': {
-            'user_id': user.id,
-            'username': user.username,
-            'first_name': user.first_name
-        }}}
-    )
-    entry_count = len(giveaway['entries']) + 1
-    channel_list_disp = '\n'.join([f'- {link}' for link in giveaway['fs_channels']])
+    db.giveaways.update_one({'_id': giveaway['_id']}, {'$push': {'entries': {
+        'user_id': user.id, 'username': user.username, 'first_name': user.first_name
+    }}})
 
+    entry_count = len(giveaway['entries']) + 1
+    chan_disp = '\n'.join([f'- {l}' for l in giveaway['fs_channels']])
     try:
-        await query.message.edit_caption(
+        query.edit_message_caption(
             caption=(
                 f"🎁 <b>GIVEAWAY:</b> {giveaway['title']}\n\n"
-                f"<b>Required:</b>\n{channel_list_disp}\n\n"
+                f"<b>Required:</b>\n{chan_disp}\n\n"
                 f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
                 f"<b>Entries:</b> {entry_count}\n"
                 f"<b>Ends at:</b> {giveaway['end_time'].strftime('%Y-%m-%d %H:%M UTC')}\n"
-                f"\nClick below to enter!"
+                "\nClick below to enter!"
             ),
             reply_markup=query.message.reply_markup,
-            parse_mode='HTML'
+            parse_mode=ParseMode.HTML
         )
     except Exception:
         pass
+    query.answer('Registered!')
 
-    await query.answer('You are registered!')
-
-# =========================
-#   Winner and Scheduler
-# =========================
-
-async def schedule_giveaway_end(context, giveaway_id, end_time):
-    delay = (end_time - datetime.utcnow()).total_seconds()
-    await asyncio.sleep(delay)
-    giveaway = db.giveaways.find_one({'_id': giveaway_id})
-    if not giveaway or not giveaway['active'] or giveaway.get('cancelled', False):
-        return
-    await end_giveaway(context, giveaway)
-
-async def end_giveaway(context, giveaway):
-    try:
-        chat_admins = await context.bot.get_chat_administrators(GROUP_ID)
-        admins = [a.user.id for a in chat_admins]
-    except Exception:
-        admins = []
+def end_giveaway(giveaway, bot):
+    admins = [a['user']['id'] for a in bot.get_chat_administrators(GROUP_ID)]
     entries = giveaway['entries']
     eligible_users = []
     for e in entries:
         try:
-            m = await context.bot.get_chat_member(GROUP_ID, e['user_id'])
+            m = bot.get_chat_member(GROUP_ID, e['user_id'])
             if e['user_id'] not in admins and not m.user.is_bot and m.status in ['member', 'administrator', 'creator']:
                 eligible_users.append(e)
         except Exception:
             continue
-
     winner = random.choice(eligible_users) if eligible_users else None
     db.giveaways.update_one({'_id': giveaway['_id']}, {'$set': {'active': False}})
-    channel_list_disp = '\n'.join([f'- {link}' for link in giveaway['fs_channels']])
+    chan_disp = '\n'.join([f'- {l}' for l in giveaway['fs_channels']])
     if winner:
-        winner_tag = f"@{winner['username']}" if winner.get('username') else winner.get('first_name', 'Anonymous')
+        winner_tag = f"@{winner['username']}" if winner.get('username') else winner.get('first_name','Anonymous')
         caption = (
             f"🎁 <b>GIVEAWAY ENDED:</b> {giveaway['title']}\n\n"
-            f"<b>Required:</b>\n{channel_list_disp}\n\n"
+            f"<b>Required:</b>\n{chan_disp}\n\n"
             f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
             f"<b>Entries:</b> {len(giveaway['entries'])}\n"
             f"<b>Winner:</b> {winner_tag}\n"
-            f"\nCongratulations! 🥳"
+            "Congratulations! 🥳"
         )
     else:
         caption = (
             f"🎁 <b>GIVEAWAY ENDED:</b> {giveaway['title']}\n\n"
-            f"<b>Required:</b>\n{channel_list_disp}\n\n"
+            f"<b>Required:</b>\n{chan_disp}\n\n"
             f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
             f"<b>Entries:</b> {len(giveaway['entries'])}\n"
-            f"<b>No eligible winner.</b>"
+            "<b>No eligible winner.</b>"
         )
     try:
-        await context.bot.edit_message_caption(
+        bot.edit_message_caption(
             chat_id=GROUP_ID,
             message_id=giveaway['message_id'],
             caption=caption,
-            parse_mode='HTML'
-        )
+            parse_mode=ParseMode.HTML)
     except Exception as e:
-        logging.error(f'Failed to edit giveaway message: {e}')
-
+        logging.error('Edit after end:', exc_info=e)
     for admin_id in ADMIN_IDS:
         try:
             if winner:
-                await context.bot.send_message(admin_id, f"Giveaway '{giveaway['title']}' winner: {winner_tag} [ID: {winner['user_id']}]")
+                bot.send_message(admin_id, f"Giveaway '{giveaway['title']}' winner: {winner_tag} [ID: {winner['user_id']}]")
             else:
-                await context.bot.send_message(admin_id, f"No eligible winner found for giveaway '{giveaway['title']}'.")
+                bot.send_message(admin_id, f"No winner for giveaway '{giveaway['title']}'.")
         except:
             pass
 
-# =========================
-#   Message Counter
-# =========================
-
-async def count_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def count_messages(update, context):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if chat_id == GROUP_ID:
         db.msg_count.update_one({'chat_id': GROUP_ID, 'user_id': user_id}, {'$inc': {'count': 1}}, upsert=True)
 
-# =========================
-#      CANCEL GIVEAWAY
-# =========================
-
-async def cancel_giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def cancel_giveaway(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await update.message.reply_text("Admins only.")
+        update.message.reply_text("Admins only.")
         return
-
     giveaway = db.giveaways.find_one({'chat_id': GROUP_ID, 'active': True, 'cancelled': False})
     if not giveaway:
-        await update.message.reply_text("No active giveaway is running in this group.")
+        update.message.reply_text("No active giveaway!")
         return
-
     db.giveaways.update_one({'_id': giveaway['_id']}, {'$set': {'active': False, 'cancelled': True}})
     try:
-        await context.bot.edit_message_caption(
+        context.bot.edit_message_caption(
             chat_id=GROUP_ID,
             message_id=giveaway['message_id'],
-            caption=(
-                f"❌ <b>GIVEAWAY CANCELLED:</b> {giveaway['title']}\n\n"
-                f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
-                f"<b>Entries:</b> {len(giveaway['entries'])}\n"
-                f"This giveaway was cancelled by the admins."
-            ),
-            parse_mode='HTML'
+            caption=f"❌ <b>GIVEAWAY CANCELLED:</b> {giveaway['title']}\n\n"
+                    f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
+                    f"<b>Entries:</b> {len(giveaway['entries'])}\n"
+                    "This giveaway was cancelled.",
+            parse_mode=ParseMode.HTML
         )
-    except Exception as e:
-        pass
-
+    except: pass
     for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_message(
-                admin_id,
-                f"Giveaway '{giveaway['title']}' was cancelled by admin {user_id}."
-            )
-        except:
-            pass
-    await update.message.reply_text("Giveaway cancelled.")
+            context.bot.send_message(admin_id, f"Giveaway '{giveaway['title']}' cancelled by {user_id}.")
+        except: pass
+    update.message.reply_text("Giveaway cancelled.")
 
-# =========================
-#           STATS
-# =========================
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def stats(update, context):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        await update.message.reply_text("Admins only.")
+        update.message.reply_text("Admins only.")
         return
-
     all_giveaways = list(db.giveaways.find({'chat_id': GROUP_ID}))
     if not all_giveaways:
-        await update.message.reply_text("No giveaways have been run yet!")
+        update.message.reply_text("No giveaways yet!")
         return
-
-    text_lines = [f"📊 <b>GIVEAWAY STATS (Group Only)</b>\nTotal giveaways: {len(all_giveaways)}\n"]
+    text_lines = [f"📊 <b>STATS</b> Total: {len(all_giveaways)}\n"]
     for idx, g in enumerate(all_giveaways, 1):
         if g.get('active', False):
             status = "Running"
@@ -359,85 +290,50 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status = "Ended"
         entries = g.get('entries', [])
         winner = None
-
-        # Try to guess winner after ended
         if not g.get('active') and not g.get('cancelled', False) and entries:
-            # Remove admins
             eligible = [e for e in entries if e['user_id'] not in ADMIN_IDS]
             if eligible:
-                winner = eligible[-1]  # Last one (past code may pick random, this is rough log)
+                winner = eligible[-1]
         winner_str = (f"@{winner['username']}" if winner and winner.get('username') else winner['first_name']
                       if winner else "No winner")
-
         text_lines.append(
-            f"<b>{idx}) {g.get('title', 'No title')}</b>\n"
-            f"Status: {status}\n"
-            f"Host: {g.get('hosted_by','')}\n"
-            f"No. Entries: {len(entries)}\n"
-            f"Winner: {winner_str}\n"
+            f"<b>{idx}) {g.get('title','No title')}</b>\nStatus: {status}\n"
+            f"Host: {g.get('hosted_by','')}\nEntries: {len(entries)}\nWinner: {winner_str}\n"
         )
-
     big_text = '\n'.join(text_lines)
     try:
-        await context.bot.send_message(user_id, big_text, parse_mode='HTML')
-        await update.message.reply_text("Stats sent to your DM.", quote=True)
-    except:
-        await update.message.reply_text("Failed to send DM (maybe you haven't started the bot in private?). Here are the stats:\n" + big_text, parse_mode='HTML')
-
-
-# =========================
-#         HELP
-# =========================
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "<b>Giveaway Bot Help</b>\n\n"
-        "Commands:\n"
-        "/start - Show welcome message\n"
-        "/help - Show this help message\n\n"
-        "<b>Admin Commands (Admins only):</b>\n"
-        "/start_giveaway - Begin a new giveaway (details will be asked in DM or group)\n"
-        "/cancel_giveaway - Cancel the currently running giveaway\n"
-        "/stats - DM you complete stats of all giveaways\n\n"
-        "<b>Usage Tips:</b>\n"
-        "• All giveaways are always posted only in the fixed group.\n"
-        "• FSUB can be any t.me group/channel/join link (comma-separated).\n"
-        "• As participant, minimum 100 messages in the group required.\n"
-        "• Bot must be admin in your group for full functionality.\n"
-        "• Contact your admin team if you need to run a giveaway.\n"
-    )
-    await update.message.reply_text(help_text, parse_mode='HTML')
-  
-
-# =========================
-#         MAIN
-# =========================
+        context.bot.send_message(user_id, big_text, parse_mode=ParseMode.HTML)
+        update.message.reply_text("Stats sent to your DM.")
+    except: update.message.reply_text("Stats DM blocked, sending here...\n"+big_text, parse_mode=ParseMode.HTML)
 
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start_giveaway', start_giveaway)],
         states={
-            ENTER_FS_CHANNELS: [MessageHandler(filters.TEXT, enter_fs_channels)],
-            ENTER_TITLE: [MessageHandler(filters.TEXT, enter_title)],
-            ENTER_BANNER: [MessageHandler(filters.PHOTO, enter_banner)],
-            ENTER_HOST: [MessageHandler(filters.TEXT, enter_host)],
-            ENTER_DURATION: [MessageHandler(filters.TEXT, enter_duration)],
+            ENTER_FS_CHANNELS: [MessageHandler(Filters.text & (~Filters.command), enter_fs_channels)],
+            ENTER_TITLE:      [MessageHandler(Filters.text & (~Filters.command), enter_title)],
+            ENTER_BANNER:     [MessageHandler(Filters.photo, enter_banner)],
+            ENTER_HOST:       [MessageHandler(Filters.text & (~Filters.command), enter_host)],
+            ENTER_DURATION:   [MessageHandler(Filters.text & (~Filters.command), enter_duration)],
         },
         fallbacks=[],
     )
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(join_giveaway_callback, pattern='join_giveaway'))
-    app.add_handler(CommandHandler('cancel_giveaway', cancel_giveaway))
-    app.add_handler(CommandHandler('stats', stats))
-    app.add_handler(CommandHandler('help', help_command))
-    app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT, count_messages))
+
+    dp.add_handler(CommandHandler('start', start))
+    dp.add_handler(CommandHandler('help', help_command))
+    dp.add_handler(conv_handler)
+    dp.add_handler(CallbackQueryHandler(join_giveaway_callback, pattern='join_giveaway'))
+    dp.add_handler(CommandHandler('cancel_giveaway', cancel_giveaway))
+    dp.add_handler(CommandHandler('stats', stats))
+    dp.add_handler(MessageHandler(Filters.group & Filters.text, count_messages))
 
     print("Bot running...")
-    app.run_polling()
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
-  
+        
