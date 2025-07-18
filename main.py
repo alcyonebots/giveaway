@@ -22,23 +22,17 @@ from telegram.ext import (
 )
 from pymongo import MongoClient
 
-# ========== CONFIG ==========
 TOKEN = '7835346917:AAGuHYIBAscjbTKoadzG7EGFaRKOS2ZMyck'
 MONGO_URI = 'mongodb+srv://Cenzo:Cenzo123@cenzo.azbk1.mongodb.net/'
 ADMIN_IDS = [1209431233, 1148182834, 6663845789]
 GROUP_ID = -1002529323673
 
-# ========== MONGO SETUP ==========
 client = MongoClient(MONGO_URI)
 db = client['giveaway_db']
 
-# ========== LOGGING ==========
 logging.basicConfig(level=logging.INFO)
 
-# ========== STATES ==========
-ENTER_FS_CHANNELS, ENTER_TITLE, ENTER_BANNER, ENTER_HOST, ENTER_DURATION = range(5)
-
-# ================= COMMANDS =================
+ENTER_FS_COUNT, ENTER_FS_CHANNELS, ENTER_TITLE, ENTER_BANNER, ENTER_HOST, ENTER_DURATION = range(6)
 
 def start(update: Update, context: CallbackContext):
     update.message.reply_text(
@@ -62,7 +56,7 @@ def help_command(update: Update, context: CallbackContext):
         "<b>How it works:</b>\n"
         "- Giveaway will always post in the fixed group\n"
         "- User must have 100+ msgs in group\n"
-        "- FSUB: accept ANY t.me group/channel/join link"
+        "- FSUB: now only supports public @ usernames"
     )
     update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -72,12 +66,38 @@ def start_giveaway(update: Update, context: CallbackContext):
         update.message.reply_text("Only admins can start a giveaway.")
         return ConversationHandler.END
     context.user_data.clear()
-    update.message.reply_text("Send FSUB channel/group links separated by commas.\nExample: https://t.me/abc, https://t.me/+invite")
+    update.message.reply_text("How many FSUB channels/groups do you want to add? (Type 0 for none, public @username only)")
+    return ENTER_FS_COUNT
+
+def enter_fs_count(update: Update, context: CallbackContext):
+    try:
+        fs_count = int(update.message.text)
+        if fs_count < 0 or fs_count > 10:
+            update.message.reply_text("Enter a number from 0 to 10.")
+            return ENTER_FS_COUNT
+    except:
+        update.message.reply_text("Enter number only (0-10).")
+        return ENTER_FS_COUNT
+    context.user_data['fs_count'] = fs_count
+    context.user_data['fs_channels'] = []
+    if fs_count == 0:
+        update.message.reply_text("No FSUB. Now send the Giveaway Title.")
+        return ENTER_TITLE
+    update.message.reply_text(f"Send @username for FSUB 1:")
+    context.user_data['fsub_step'] = 1
     return ENTER_FS_CHANNELS
 
 def enter_fs_channels(update: Update, context: CallbackContext):
-    fs_channels = [c.strip() for c in update.message.text.split(',') if c.strip()]
-    context.user_data['fs_channels'] = fs_channels
+    fsubs = context.user_data['fs_channels']
+    uname = update.message.text.strip()
+    # Validate username
+    if not (uname.startswith('@') and len(uname) > 1 and uname[1:].replace('_','').isalnum()):
+        update.message.reply_text("Please send a valid @username (starts with @, letters, digits, underscore).")
+        return ENTER_FS_CHANNELS
+    fsubs.append(uname)
+    if len(fsubs) < context.user_data['fs_count']:
+        update.message.reply_text(f"Send @username for FSUB {len(fsubs)+1}:")
+        return ENTER_FS_CHANNELS
     update.message.reply_text("Now send the Giveaway Title.")
     return ENTER_TITLE
 
@@ -91,9 +111,8 @@ def enter_banner(update: Update, context: CallbackContext):
         context.user_data['banner_file_id'] = update.message.photo[-1].file_id
         update.message.reply_text("Who is Hosting? (send host name or username)")
         return ENTER_HOST
-    else:
-        update.message.reply_text('Please send an image/photo for the banner!')
-        return ENTER_BANNER
+    update.message.reply_text('Please send an image/photo for the banner!')
+    return ENTER_BANNER
 
 def enter_host(update: Update, context: CallbackContext):
     context.user_data['hosted_by'] = update.message.text
@@ -108,15 +127,16 @@ def enter_duration(update: Update, context: CallbackContext):
         return ENTER_DURATION
     context.user_data['duration_hours'] = hours
 
-    fs_channels = context.user_data['fs_channels']
+    fs_channels = context.user_data['fs_channels']  # List of @usernames or empty
     title = context.user_data['title']
     banner_file_id = context.user_data['banner_file_id']
     hosted_by = context.user_data['hosted_by']
 
-    # Using "Join 1", "Join 2" with hidden HTML links
-    channel_list_disp = '\n'.join(
-        [f'• <a href="{link}">Join {i+1}</a>' for i, link in enumerate(fs_channels)]
-    )
+    if fs_channels:
+        channel_list_disp = '\n'.join([uname for uname in fs_channels])
+        requirement_caption = f"<b>Required:</b>\n{channel_list_disp}\n\n"
+    else:
+        requirement_caption = ""
 
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🎉 Participate", callback_data="join_giveaway")]])
     msg = context.bot.send_photo(
@@ -124,7 +144,7 @@ def enter_duration(update: Update, context: CallbackContext):
         photo=banner_file_id,
         caption=(
             f"🎁 <b>GIVEAWAY:</b> {title}\n\n"
-            f"<b>Required:</b>\n{channel_list_disp}\n\n"
+            f"{requirement_caption}"
             f"<b>Hosted By:</b> {hosted_by}\n"
             f"<b>Entries:</b> 0\n"
             f"<b>Ends in:</b> {hours} hour(s).\n"
@@ -182,24 +202,18 @@ def join_giveaway_callback(update: Update, context: CallbackContext):
         query.answer('You need at least 100 msgs in the group!', show_alert=True)
         return
 
-    for ch_link in giveaway['fs_channels']:
-        time.sleep(0.5)  # avoid flood
+    # FSUB check
+    for uname in giveaway['fs_channels']:
+        # Remove `@` for get_chat_member
+        uname_noat = uname[1:]
         try:
-            identifier = ch_link.split('t.me/')[1] if 't.me/' in ch_link else ch_link
-            if identifier.startswith('+'):
-                identifier = ch_link  # invite link (full)
-            # BOT must be at least member/admin in FSUB channel/group
-            bot_member = context.bot.get_chat_member(identifier, context.bot.id)
-            if bot_member.status not in ['member', 'administrator', 'creator']:
-                query.answer('Bot must be admin/member in all required channels/groups!', show_alert=True)
-                return
-            # Check user membership
-            member = context.bot.get_chat_member(identifier, user.id)
+            member = context.bot.get_chat_member(uname, user.id)
             if member.status in [ChatMember.LEFT, ChatMember.KICKED]:
                 query.answer('You must join all required channels/groups to participate!', show_alert=True)
                 return
         except Exception:
-            query.answer('Bot must be admin/member in all required channels/groups!', show_alert=True)
+            # Could be if bot isn't admin/public access error
+            query.answer(f"Bot must be admin/member in {uname} (public group/channel only)!", show_alert=True)
             return
 
     db.giveaways.update_one({'_id': giveaway['_id']}, {'$push': {'entries': {
@@ -208,12 +222,18 @@ def join_giveaway_callback(update: Update, context: CallbackContext):
         'first_name': user.first_name
     }}})
     entry_count = len(giveaway['entries']) + 1
-    chan_disp = '\n'.join([f'• <a href="{l}">Join {i+1}</a>' for i, l in enumerate(giveaway['fs_channels'])])
+
+    if giveaway['fs_channels']:
+        chan_disp = '\n'.join([uname for uname in giveaway['fs_channels']])
+        requirement_caption = f"<b>Required:</b>\n{chan_disp}\n\n"
+    else:
+        requirement_caption = ""
+
     try:
         query.edit_message_caption(
             caption=(
                 f"🎁 <b>GIVEAWAY:</b> {giveaway['title']}\n\n"
-                f"<b>Required:</b>\n{chan_disp}\n\n"
+                f"{requirement_caption}"
                 f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
                 f"<b>Entries:</b> {entry_count}\n"
                 f"<b>Ends at:</b> {giveaway['end_time'].strftime('%Y-%m-%d %H:%M UTC')}\n"
@@ -239,15 +259,19 @@ def end_giveaway(giveaway, bot):
         except Exception:
             continue
     winner = random.choice(eligible_users) if eligible_users else None
+
+    if giveaway['fs_channels']:
+        chan_disp = '\n'.join([uname for uname in giveaway['fs_channels']])
+        requirement_caption = f"<b>Required:</b>\n{chan_disp}\n\n"
+    else:
+        requirement_caption = ""
+
     db.giveaways.update_one({'_id': giveaway['_id']}, {'$set': {'active': False}})
-    chan_disp = '\n'.join(
-        [f'• <a href="{l}">Join {i+1}</a>' for i, l in enumerate(giveaway['fs_channels'])]
-    )
     if winner:
         winner_tag = f"@{winner['username']}" if winner.get('username') else winner.get('first_name', 'Anonymous')
         caption = (
             f"🎁 <b>GIVEAWAY ENDED:</b> {giveaway['title']}\n\n"
-            f"<b>Required:</b>\n{chan_disp}\n\n"
+            f"{requirement_caption}"
             f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
             f"<b>Entries:</b> {len(giveaway['entries'])}\n"
             f"<b>Winner:</b> {winner_tag}\n"
@@ -256,7 +280,7 @@ def end_giveaway(giveaway, bot):
     else:
         caption = (
             f"🎁 <b>GIVEAWAY ENDED:</b> {giveaway['title']}\n\n"
-            f"<b>Required:</b>\n{chan_disp}\n\n"
+            f"{requirement_caption}"
             f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
             f"<b>Entries:</b> {len(giveaway['entries'])}\n"
             "<b>No eligible winner.</b>"
@@ -279,7 +303,7 @@ def end_giveaway(giveaway, bot):
         except:
             pass
 
-def count_messages(update, context):
+def count_messages(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if chat_id == GROUP_ID:
@@ -295,11 +319,19 @@ def cancel_giveaway(update, context):
         update.message.reply_text("No active giveaway!")
         return
     db.giveaways.update_one({'_id': giveaway['_id']}, {'$set': {'active': False, 'cancelled': True}})
+
+    if giveaway['fs_channels']:
+        chan_disp = '\n'.join([uname for uname in giveaway['fs_channels']])
+        requirement_caption = f"<b>Required:</b>\n{chan_disp}\n\n"
+    else:
+        requirement_caption = ""
+
     try:
         context.bot.edit_message_caption(
             chat_id=GROUP_ID,
             message_id=giveaway['message_id'],
             caption=f"❌ <b>GIVEAWAY CANCELLED:</b> {giveaway['title']}\n\n"
+                    f"{requirement_caption}"
                     f"<b>Hosted By:</b> {giveaway['hosted_by']}\n"
                     f"<b>Entries:</b> {len(giveaway['entries'])}\n"
                     "This giveaway was cancelled.",
@@ -355,7 +387,8 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start_giveaway', start_giveaway)],
         states={
-            ENTER_FS_CHANNELS: [MessageHandler(Filters.text & (~Filters.command), enter_fs_channels)],
+            ENTER_FS_COUNT:   [MessageHandler(Filters.text & (~Filters.command), enter_fs_count)],
+            ENTER_FS_CHANNELS:[MessageHandler(Filters.text & (~Filters.command), enter_fs_channels)],
             ENTER_TITLE:      [MessageHandler(Filters.text & (~Filters.command), enter_title)],
             ENTER_BANNER:     [MessageHandler(Filters.photo, enter_banner)],
             ENTER_HOST:       [MessageHandler(Filters.text & (~Filters.command), enter_host)],
@@ -378,4 +411,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-                                         
+    
