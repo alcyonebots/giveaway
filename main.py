@@ -152,7 +152,7 @@ def enter_duration(update: Update, context: CallbackContext):
     requirement_caption = ""
     if fs_channels:
         channel_list_disp = '\n'.join([uname for uname in fs_channels])
-        requirement_caption = f"<b>Required:</b>\n{channel_list_disp}\n\n"
+        requirement_caption = f"<b>Required Channel To Join:</b> {channel_list_disp}\n\n"
 
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🎉 Participate", callback_data="join_giveaway")]])
     msg = context.bot.send_photo(
@@ -214,8 +214,8 @@ def join_giveaway_callback(update: Update, context: CallbackContext):
         return
 
     msg_count = db.msg_count.find_one({'chat_id': GROUP_ID, 'user_id': user.id}) or {}
-    if msg_count.get('count', 0) < 100:
-        query.answer('You need at least 100 msgs in the group!', show_alert=True)
+    if msg_count.get('count', 0) < 10:
+        query.answer('You need at least 10 msgs in the group!', show_alert=True)
         return
 
     # FSUB check
@@ -241,7 +241,7 @@ def join_giveaway_callback(update: Update, context: CallbackContext):
 
     if giveaway['fs_channels']:
         chan_disp = '\n'.join([uname for uname in giveaway['fs_channels']])
-        requirement_caption = f"<b>Required:</b>\n{chan_disp}\n\n"
+        requirement_caption = f"<b>Required Channel To Join:</b>\n{chan_disp}\n\n"
     else:
         requirement_caption = ""
 
